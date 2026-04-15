@@ -6,17 +6,24 @@ import os
 # Windows 专用标志，用于彻底隐藏 cmd 窗口
 CREATE_NO_WINDOW = 0x08000000
 
+# --- 修改点：将配置文件指向系统 AppData 目录 ---
+# 这会保存在 C:\Users\用户名\AppData\Roaming\git_tool_config.txt
+CONFIG_FILE = os.path.join(os.getenv('APPDATA'), "git_tool_config.txt")
+
 class GitTool:
     def __init__(self, root):
         self.root = root
         self.root.title("Git 自动化工具")
-        self.root.geometry("450x320")
+        self.root.geometry("500x250")
 
         # --- 第一行：项目位置 ---
         tk.Label(root, text="1. 项目目录:").grid(row=0, column=0, sticky="w", padx=10, pady=10)
         self.entry_path = tk.Entry(root, width=40)
         self.entry_path.grid(row=0, column=1, padx=5)
         tk.Button(root, text="选择", command=self.select_path).grid(row=0, column=2, padx=5)
+
+        # 启动时加载上次记忆的路径
+        self.load_last_path()
 
         # --- 第二行：Add 操作 ---
         tk.Label(root, text="2. 暂存文件:").grid(row=1, column=0, sticky="w", padx=10, pady=10)
@@ -35,6 +42,23 @@ class GitTool:
         # 状态显示
         self.status_label = tk.Label(root, text="状态: 等待操作", fg="blue", wraplength=400)
         self.status_label.grid(row=4, column=0, columnspan=3, pady=20)
+
+    def load_last_path(self):
+        if os.path.exists(CONFIG_FILE):
+            try:
+                with open(CONFIG_FILE, "r", encoding="utf-8") as f:
+                    path = f.read().strip()
+                    if os.path.exists(path):
+                        self.entry_path.insert(0, path)
+            except:
+                pass
+
+    def save_path(self, path):
+        try:
+            with open(CONFIG_FILE, "w", encoding="utf-8") as f:
+                f.write(path)
+        except:
+            pass
 
     def translate_error(self, error_msg):
         """将常见的 Git 错误翻译成中文"""
@@ -61,6 +85,7 @@ class GitTool:
         if path:
             self.entry_path.delete(0, tk.END)
             self.entry_path.insert(0, path)
+            self.save_path(path)
 
     def git_add(self):
         if self.get_path():
@@ -77,11 +102,11 @@ class GitTool:
             return
         if self.get_path():
             try:
-                # stderr=subprocess.PIPE 用来捕获详细错误信息
                 result = subprocess.run(["git", "commit", "-m", msg], 
                                      capture_output=True, text=True, creationflags=CREATE_NO_WINDOW)
                 if result.returncode == 0:
                     self.status_label.config(text="状态: Commit 成功", fg="green")
+                    self.entry_msg.delete(0, tk.END)
                 else:
                     messagebox.showinfo("提示", self.translate_error(result.stderr))
             except Exception as e:
@@ -98,24 +123,21 @@ class GitTool:
             self.root.update()
             
             try:
-                # 尝试执行 push
                 result = subprocess.run(["git", "push", "origin", "main"], 
                                      capture_output=True, text=True, creationflags=CREATE_NO_WINDOW)
                 
                 if result.returncode == 0:
                     self.status_label.config(text="状态: Push 成功！", fg="green")
                     messagebox.showinfo("成功", "已成功推送到远程仓库")
-                    return # 成功后退出函数
+                    return
                 else:
                     last_error = result.stderr
-                    # 如果不是网络问题（比如是代码冲突），重试通常没用，直接跳出重试逻辑
                     if "fetch first" in last_error:
                         break
                         
             except Exception as e:
                 last_error = str(e)
             
-        # 如果循环结束还没 return，说明全失败了
         self.status_label.config(text="状态: Push 失败", fg="red")
         messagebox.showerror("推送最终失败", self.translate_error(last_error))
 
