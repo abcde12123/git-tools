@@ -14,7 +14,7 @@ class GitTool:
     def __init__(self, root):
         self.root = root
         self.root.title("Git 自动化工具 v2.6 ")
-        self.root.geometry("680x620")
+        self.root.geometry("680x720")
         self.root.configure(bg="#f8f9fa")
         
         # 设置全局样式
@@ -98,6 +98,43 @@ class GitTool:
         # 修复进度条初始显示问题：默认隐藏
         self.progress.grid_remove()
 
+        # --- 网络设置区 ---
+        frame_net = tk.Frame(self.root, bg="white", highlightbackground="#dee2e6", highlightthickness=1, bd=0)
+        frame_net.grid(row=5, column=1, pady=10, sticky="nsew")
+        frame_net.grid_columnconfigure(0, weight=1)
+
+        ttk.Label(frame_net, text="🌐 网络", style='Header.TLabel', background="white").grid(row=0, column=0, columnspan=3, pady=(12, 10))
+
+        frame_net_row = tk.Frame(frame_net, bg="white")
+        frame_net_row.grid(row=1, column=0, columnspan=3, pady=(0, 12))
+
+        ttk.Label(frame_net_row, text="代理端口:", background="white").pack(side="left", padx=(0, 6))
+        self.entry_proxy_port = ttk.Entry(frame_net_row, font=('微软雅黑', 10), width=12)
+        self.entry_proxy_port.pack(side="left", padx=(0, 10))
+        self.btn_set_proxy = tk.Button(
+            frame_net_row,
+            text="启用代理",
+            bg="#20c997",
+            fg="white",
+            font=('微软雅黑', 9, 'bold'),
+            relief="flat",
+            cursor="hand2",
+            command=lambda: self.run_thread_no_path(self.git_set_proxy),
+        )
+        self.btn_set_proxy.pack(side="left", padx=(0, 10))
+
+        self.btn_unset_proxy = tk.Button(
+            frame_net_row,
+            text="取消代理",
+            bg="#6c757d",
+            fg="white",
+            font=('微软雅黑', 9, 'bold'),
+            relief="flat",
+            cursor="hand2",
+            command=lambda: self.run_thread_no_path(self.git_unset_proxy),
+        )
+        self.btn_unset_proxy.pack(side="left")
+
     # --- 线程与 UI 状态管理 ---
     def set_buttons_state(self, state):
         state_str = tk.NORMAL if state else tk.DISABLED
@@ -107,6 +144,8 @@ class GitTool:
         self.btn_push.config(state=state_str)
         self.btn_init.config(state=state_str)
         self.btn_force.config(state=state_str)
+        self.btn_set_proxy.config(state=state_str)
+        self.btn_unset_proxy.config(state=state_str)
 
     def run_thread(self, func):
         if not self.get_path():
@@ -129,6 +168,26 @@ class GitTool:
             finally:
                 self.root.after(0, self.progress.stop)
                 # 隐藏进度条
+                self.root.after(0, self.progress.grid_remove)
+                self.root.after(0, self.set_buttons_state, True)
+
+        threading.Thread(target=thread_target, daemon=True).start()
+
+    def run_thread_no_path(self, func):
+        self.set_buttons_state(False)
+        self.progress.grid(row=1, column=0, sticky="ew", padx=40)
+        self.progress.start(15)
+        self.update_status("正在执行中，请稍候...", "#007bff")
+
+        def thread_target():
+            try:
+                os.environ['GIT_HTTP_LOW_SPEED_LIMIT'] = '1000'
+                os.environ['GIT_HTTP_LOW_SPEED_TIME'] = '60'
+                func()
+            except Exception as e:
+                self.root.after(0, self.update_status, f"系统错误: {str(e)}", "red")
+            finally:
+                self.root.after(0, self.progress.stop)
                 self.root.after(0, self.progress.grid_remove)
                 self.root.after(0, self.set_buttons_state, True)
 
@@ -199,6 +258,41 @@ class GitTool:
         else: 
             self.root.after(0, self.update_status, "❌ 联通失败", "red")
             self.root.after(0, messagebox.showerror, "错误", err)
+
+    def git_set_proxy(self):
+        port = self.entry_proxy_port.get().strip()
+        if not port.isdigit():
+            self.root.after(0, self.update_status, "⚠️ 请输入正确端口号", "#ffc107")
+            return
+        port_int = int(port)
+        if port_int < 1 or port_int > 65535:
+            self.root.after(0, self.update_status, "⚠️ 端口号范围 1-65535", "#ffc107")
+            return
+        self.root.after(0, self.save_config)
+
+        proxy_url = f"http://127.0.0.1:{port_int}"
+        res1 = subprocess.run(["git", "config", "--global", "http.proxy", proxy_url], capture_output=True, text=True, creationflags=CREATE_NO_WINDOW)
+        res2 = subprocess.run(["git", "config", "--global", "https.proxy", proxy_url], capture_output=True, text=True, creationflags=CREATE_NO_WINDOW)
+        if res1.returncode == 0 and res2.returncode == 0:
+            self.root.after(0, self.update_status, f"✅ 已启用代理: 127.0.0.1:{port_int}")
+        else:
+            err = (res1.stderr or res1.stdout or "") + "\n" + (res2.stderr or res2.stdout or "")
+            self.root.after(0, self.update_status, "❌ 代理设置失败", "red")
+            self.root.after(0, messagebox.showerror, "错误", err.strip() or "未知错误")
+
+    def git_unset_proxy(self):
+        res1 = subprocess.run(["git", "config", "--global", "--unset", "http.proxy"], capture_output=True, text=True, creationflags=CREATE_NO_WINDOW)
+        res2 = subprocess.run(["git", "config", "--global", "--unset", "https.proxy"], capture_output=True, text=True, creationflags=CREATE_NO_WINDOW)
+        if res1.returncode == 0 and res2.returncode == 0:
+            self.root.after(0, self.update_status, "✅ 已取消代理")
+            return
+
+        stderr_all = ((res1.stderr or res1.stdout or "") + "\n" + (res2.stderr or res2.stdout or "")).strip()
+        if "unset" in stderr_all.lower() or "not found" in stderr_all.lower():
+            self.root.after(0, self.update_status, "✅ 已取消代理")
+        else:
+            self.root.after(0, self.update_status, "❌ 取消代理失败", "red")
+            self.root.after(0, messagebox.showerror, "错误", stderr_all or "未知错误")
 
     # --- 初始化窗口 ---
     def open_init_window(self):
@@ -274,22 +368,33 @@ class GitTool:
         if p:
             self.entry_path.delete(0, tk.END)
             self.entry_path.insert(0, p)
-            try:
-                os.makedirs(os.path.dirname(CONFIG_FILE), exist_ok=True)
-                with open(CONFIG_FILE, "w", encoding="utf-8") as f: 
-                    f.write(p)
-            except Exception:
-                pass
+            self.save_config()
 
     def load_last_path(self):
         if os.path.exists(CONFIG_FILE):
             try:
                 with open(CONFIG_FILE, "r", encoding="utf-8") as f:
-                    p = f.read().strip()
-                    if os.path.exists(p): 
+                    lines = f.read().splitlines()
+                    p = lines[0].strip() if len(lines) > 0 else ""
+                    port = lines[1].strip() if len(lines) > 1 else ""
+                    if os.path.exists(p):
                         self.entry_path.insert(0, p)
+                    if port and hasattr(self, "entry_proxy_port"):
+                        self.entry_proxy_port.insert(0, port)
             except Exception:
                 pass
+
+    def save_config(self):
+        p = self.entry_path.get().strip()
+        port = ""
+        if hasattr(self, "entry_proxy_port"):
+            port = self.entry_proxy_port.get().strip()
+        try:
+            os.makedirs(os.path.dirname(CONFIG_FILE), exist_ok=True)
+            with open(CONFIG_FILE, "w", encoding="utf-8") as f:
+                f.write(p + "\n" + port)
+        except Exception:
+            pass
 
 if __name__ == "__main__":
     root = tk.Tk()
